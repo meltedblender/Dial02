@@ -1,0 +1,331 @@
+using UnityEngine;
+using UnityEngine.UI;
+using System.Collections;
+
+public class DialController : MonoBehaviour
+{
+    [SerializeField] private Transform dial;
+    [SerializeField] private Transform currentSelector;
+    [SerializeField] private bool isFingerOnDial = false;
+    [SerializeField] private float currentRotation;
+    [SerializeField] private Text dialedNumberText; // Drag your UI Text object here in the Inspector
+    [SerializeField] private float cooldownTime = 1f; // Cooldown time in seconds
+    [SerializeField] private float sensitivity = 1f; // Sensitivity factor for rotation
+    [SerializeField] private float minRotation = 0f; // Minimum rotation limit
+    [SerializeField] private float maxRotation = -330f; // Maximum rotation limit
+    private string dialedNumber = "";
+    private float initialFingerAngle;
+    private float initialDialRotation;
+    private float cumulativeAngle = 0f;
+    private float exitDelay = 0.1f; // Delay before registering exit
+    private float exitTimer = 0f;
+    [SerializeField] private float disableDuration = 3;
+    private Coroutine resetCoroutine;
+    private bool digitAdded = false; // Flag to prevent double counting
+    private float cooldownTimer = 0f; // Timer to track cooldown
+    public Collider[] collidersForDisabling;
+    [SerializeField] private float initialFingerRotation, currentFingerRotation;
+
+
+    void Update()
+    {
+        if (isFingerOnDial && currentSelector != null)
+        {
+            RotateDialWithFinger();
+            CheckAndHandleMaxRotation();
+            exitTimer = 0f; // Reset the timer while the finger is on the dial
+        }
+        else
+        {
+            exitTimer += Time.deltaTime;
+            if (exitTimer >= exitDelay)
+            {
+                isFingerOnDial = false;
+                currentSelector = null;
+                digitAdded = false; // Reset the flag when the finger is off the dial
+            }
+        }
+
+        // Update the cooldown timer
+        if (cooldownTimer > 0)
+        {
+            cooldownTimer -= Time.deltaTime;
+        }
+    }
+    private void ResetFingerRotationCalculation()
+    {
+        // Reset any variables or states related to the finger rotation calculation
+        // For example, if you have a variable tracking the finger's initial rotation, reset it here
+        initialFingerRotation = 0f;
+        currentFingerRotation = 0f;
+    }
+
+
+    void RotateDialWithFinger()
+{
+    if (!isFingerOnDial) return; // Stop rotation if the finger is not on the dial
+
+    Vector3 direction = currentSelector.position - dial.position;
+    float currentFingerAngle = Mathf.Atan2(direction.z, direction.x) * Mathf.Rad2Deg;
+    float angleDifference = Mathf.DeltaAngle(initialFingerAngle, currentFingerAngle);
+
+    // Update the cumulative angle with sensitivity factor
+    cumulativeAngle += angleDifference * sensitivity;
+    initialFingerAngle = currentFingerAngle; // Update the initial finger angle for the next frame
+
+    // Calculate the new rotation with clamping
+    currentRotation = initialDialRotation + cumulativeAngle;
+    currentRotation = Mathf.Clamp(currentRotation, maxRotation, -maxRotation); // Clamp the rotation between -330 and 330 degrees
+    Quaternion targetRotation = Quaternion.Euler(0, currentRotation, 0);
+    dial.localRotation = targetRotation; // Directly set the rotation without Slerp
+
+    Debug.Log("Initial Dial Rotation: " + initialDialRotation);
+    Debug.Log("Cumulative Angle: " + cumulativeAngle);
+    Debug.Log("Dial Rotation: " + currentRotation);
+}
+
+
+
+    private void CheckAndHandleMaxRotation()
+    {
+        if (currentRotation <= maxRotation)
+        {
+            currentRotation = maxRotation;
+            isFingerOnDial = false; // Stop tracking the finger
+            Debug.Log("Dial reached maximum rotation");
+
+            if (resetCoroutine != null)
+            {
+                StopCoroutine(resetCoroutine);
+            }
+            resetCoroutine = StartCoroutine(SmoothResetRotation());
+
+            // Get the current digit based on the rotation and update the dialed number
+            if (!digitAdded && cooldownTimer <= 0)
+            {
+                int digit = GetDigitFromRotation(currentRotation);
+                if (digit != -1)
+                {
+                    UpdateDialedNumber(digit);
+                    digitAdded = true; // Set the flag to prevent double counting
+                    cooldownTimer = cooldownTime; // Reset the cooldown timer
+                }
+            }
+
+            // Stop rotating with finger
+            RotateDialWithFinger = false;
+        }
+    }
+
+
+
+
+    void OnTriggerEnter(Collider other)
+    {
+        if (other.CompareTag("PlayerSelector"))
+        {
+            isFingerOnDial = true;
+            currentSelector = other.transform;
+            Vector3 direction = currentSelector.position - dial.position;
+            initialFingerAngle = Mathf.Atan2(direction.z, direction.x) * Mathf.Rad2Deg;
+            initialDialRotation = currentRotation;
+            cumulativeAngle = 0f; // Reset the cumulative angle
+            Debug.Log("Finger entered dial collider");
+        }
+    }
+    /*
+    void OnTriggerExit(Collider other)
+    {
+        if (other.CompareTag("PlayerSelector"))
+        {
+            isFingerOnDial = false; // Stop tracking the finger
+            exitTimer = 0f; // Start the exit timer
+            Debug.Log("Finger exited dial collider");
+
+            if (resetCoroutine != null)
+            {
+                StopCoroutine(resetCoroutine);
+            }
+            resetCoroutine = StartCoroutine(SmoothResetRotation());
+
+            // Get the current digit based on the rotation and update the dialed number
+            if (!digitAdded && cooldownTimer <= 0)
+            {
+                int digit = GetDigitFromRotation(currentRotation);
+                if (digit != -1)
+                {
+                    UpdateDialedNumber(digit);
+                    digitAdded = true; // Set the flag to prevent double counting
+                    cooldownTimer = cooldownTime; // Reset the cooldown timer
+
+                    // Stop rotating with finger
+                    rotatingDialWithFinger = false;
+                }
+            }
+        }
+    }
+
+    */
+
+
+    private IEnumerator DisableCollidersTemporarily()
+    {
+        foreach (Collider col in collidersForDisabling)
+        {
+            col.enabled = false;
+        }
+
+        yield return new WaitForSeconds(disableDuration);
+
+        foreach (Collider col in collidersForDisabling)
+        {
+            col.enabled = true;
+        }
+    }
+
+    public void SetActiveCollider(int number)
+    {
+        for (int i = 0; i < collidersForDisabling.Length; i++)
+        {
+            collidersForDisabling[i].enabled = (i == number);
+        }
+    }
+
+    private float NormalizeRotation(float rotation)
+    {
+        rotation = rotation % 360f;
+        if (rotation > 0)
+        {
+            rotation -= 360f;
+        }
+        return rotation;
+    }
+
+
+
+    private void CheckAndStopAtMaxRotation()
+    {
+        if (currentRotation <= maxRotation)
+        {
+            currentRotation = maxRotation;
+            isFingerOnDial = false; // Stop letting the finger dictate the rotation
+            StartCoroutine(SmoothResetRotation());
+        }
+    }
+
+    IEnumerator SmoothResetRotation()
+    {
+        Debug.Log("Starting SmoothResetRotation coroutine");
+        float duration = 1f; // Duration of the smooth reset
+        float elapsed = 0f;
+        float startRotation = NormalizeRotation(currentRotation);
+        float endRotation = 0f;
+
+        // Ensure the dial returns counterclockwise by adjusting the start rotation
+        if (startRotation < endRotation)
+        {
+            startRotation += 360f;
+        }
+
+        while (elapsed < duration)
+        {
+            float angle = Mathf.Lerp(startRotation, endRotation, elapsed / duration);
+            dial.localRotation = Quaternion.Euler(0, angle, 0);
+            elapsed += Time.deltaTime;
+            yield return null;
+        }
+
+        dial.localRotation = Quaternion.Euler(0, endRotation, 0); // Ensure it ends exactly at the target rotation
+        currentRotation = endRotation; // Reset the current rotation
+        Debug.Log("Dial reset to original orientation");
+
+        // Reset the finger rotation calculation
+        ResetFingerRotationCalculation();
+    }
+
+
+
+
+    int GetDigitFromRotation(float yRotation)
+    {
+        // Normalize the rotation to be within -360 to 0 degrees
+        yRotation = (yRotation > 0) ? yRotation - 360 : yRotation;
+
+        // Define the ranges for each digit
+        if (yRotation >= -345 && yRotation < -315) return 0;
+        if (yRotation >= -315 && yRotation < -285) return 9;
+        if (yRotation >= -285 && yRotation < -255) return 8;
+        if (yRotation >= -255 && yRotation < -225) return 7;
+        if (yRotation >= -225 && yRotation < -195) return 6;
+        if (yRotation >= -195 && yRotation < -165) return 5;
+        if (yRotation >= -165 && yRotation < -135) return 4;
+        if (yRotation >= -135 && yRotation < -105) return 3;
+        if (yRotation >= -105 && yRotation < -75) return 2;
+        if (yRotation >= -75 && yRotation < -45) return 1;
+
+        // Default case (shouldn't happen if ranges are correct)
+        return -1;
+    }
+
+    void UpdateDialedNumber(int digit)
+    {
+        dialedNumber += digit.ToString();
+        dialedNumberText.text = dialedNumber;
+    }
+
+    public void ClearDialedNumber()
+    {
+        dialedNumber = "";
+        dialedNumberText.text = dialedNumber;
+        Debug.Log("Dialed number cleared");
+    }
+
+
+
+    public void SetDialNumber(int number)
+    {
+        switch (number)
+        {
+            case 0:
+                maxRotation = -330;
+                break;
+            case 1:
+                maxRotation = -60;
+                break;
+            case 2:
+                maxRotation = -90;
+                break;
+            case 3:
+                maxRotation = -120;
+                break;
+            case 4:
+                maxRotation = -150;
+                break;
+            case 5:
+                maxRotation = -180;
+                break;
+            case 6:
+                maxRotation = -210;
+                break;
+            case 7:
+                maxRotation = -240;
+                break;
+            case 8:
+                maxRotation = -270;
+                break;
+            case 9:
+                maxRotation = -300;
+                break;
+            default:
+                Debug.LogError("Invalid number. Please enter a number between 0 and 9.");
+                break;
+        }
+
+        currentRotation = NormalizeRotation(currentRotation);
+    }
+
+
+
+
+}
+
